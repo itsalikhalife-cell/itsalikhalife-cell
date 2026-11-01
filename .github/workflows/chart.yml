@@ -1,0 +1,39 @@
+# Redraws the contribution chart every six hours and publishes it to the output branch,
+# which the README's images point at. Run it by hand from the Actions tab any time.
+name: contribution chart
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [render.mjs, .github/workflows/chart.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: chart
+  cancel-in-progress: true
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Draw the chart
+        run: node render.mjs
+        env:
+          LOGIN: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Publish to the output branch
+        working-directory: dist
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git init -q -b output
+          git add .
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -qm "Redraw contribution chart"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" output
