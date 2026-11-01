@@ -1,5 +1,6 @@
-// Draws the profile's contribution chart, one candle per week, in light and dark.
-// Run by .github/workflows/chart.yml every six hours with LOGIN and GITHUB_TOKEN set.
+// Draws the contribution chart, one candle per week: light and dark for the GitHub profile, and
+// desktop and phone versions for ceokhalifa.com, which loads them straight from the output branch.
+// Run by .github/workflows/chart.yml every hour with LOGIN and GITHUB_TOKEN set.
 import { mkdir, writeFile } from 'node:fs/promises';
 
 const LOGIN = process.env.LOGIN;
@@ -13,10 +14,6 @@ const FONT = `-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,
 const CYCLE = 16; // seconds
 const DRAW_START = 3; // % of the loop when the first candle prints
 const DRAW_END = 55; // % of the loop when the last candle prints
-
-const W = 880,
-	H = 316,
-	PAD = 24;
 
 const THEMES = {
 	light: {
@@ -39,6 +36,63 @@ const THEMES = {
 		down: '#f7525f',
 		average: '#8b7dff',
 	},
+	// ceokhalifa.com's white cards. The site card draws the rounded corners and shadow.
+	site: {
+		card: '#ffffff',
+		grid: '#f0eee8',
+		ink: '#1a1a1a',
+		muted: '#85847d',
+		up: '#089981',
+		down: '#f23645',
+		average: '#1d00e5',
+	},
+};
+// Sizes for each place the chart is shown. `axis` is the room kept on the right for the price
+// labels, and `small` is the size of the axis, month and price tag text.
+const LAYOUTS = {
+	profile: {
+		W: 880,
+		H: 316,
+		pad: 24,
+		axis: 44,
+		radius: 16,
+		small: 11,
+		title: { y: 42, size: 14, text: 'Contributions · 1W' },
+		total: { y: 84, size: 34, note: 'contributions in the last year', noteSize: 14, gap: 8 },
+		stats: { count: 4, labelY: 42, valueY: 66, gap: 104, labelSize: 12, valueSize: 18 },
+		plot: { top: 112, bottom: 250, volumeTop: 256, volumeBottom: 278, monthsY: 300 },
+	},
+	site: {
+		W: 944,
+		H: 290,
+		pad: 28,
+		axis: 44,
+		radius: 20,
+		small: 11,
+		title: { y: 40, size: 14, text: 'GitHub contributions · 1W' },
+		total: { y: 78, size: 32, note: 'contributions in the last year', noteSize: 14, gap: 8 },
+		stats: { count: 4, labelY: 40, valueY: 64, gap: 112, labelSize: 12, valueSize: 18 },
+		plot: { top: 100, bottom: 224, volumeTop: 230, volumeBottom: 250, monthsY: 272 },
+	},
+	'site-mobile': {
+		W: 360,
+		H: 227,
+		pad: 18,
+		axis: 30,
+		radius: 20,
+		small: 10,
+		title: { y: 30, size: 12, text: 'GitHub contributions · 1W' },
+		total: { y: 60, size: 24, note: 'in the last year', noteSize: 11, gap: 6 },
+		stats: { count: 1, labelY: 30, valueY: 52, gap: 0, labelSize: 11, valueSize: 15 },
+		plot: { top: 80, bottom: 174, volumeTop: 179, volumeBottom: 193, monthsY: 213 },
+	},
+};
+
+const CHARTS = {
+	'chart-light.svg': ['profile', 'light'],
+	'chart-dark.svg': ['profile', 'dark'],
+	'site-desktop.svg': ['site', 'site'],
+	'site-mobile.svg': ['site-mobile', 'site'],
 };
 
 const fmt = (n) => Math.round(n).toLocaleString('en-US');
@@ -111,8 +165,9 @@ function axis(max) {
 	return { step, top: Math.ceil(Math.max(max, 1) / step) * step };
 }
 
-function chart({ name, days }, theme) {
+function chart({ name, days }, layout, theme) {
 	const t = THEMES[theme];
+	const { W, H, pad: PAD, small, title, total: big, stats: st, plot } = LAYOUTS[layout];
 	const weeks = weekly(days);
 	const n = weeks.length;
 	const last = weeks.at(-1);
@@ -121,11 +176,8 @@ function chart({ name, days }, theme) {
 	const lastColour = lastUp ? t.up : t.down;
 
 	const left = PAD,
-		right = W - PAD - 44,
-		top = 112,
-		bottom = 250,
-		volumeTop = 256,
-		volumeBottom = 278;
+		right = W - PAD - LAYOUTS[layout].axis,
+		{ top, bottom, volumeTop, volumeBottom } = plot;
 	const { step: tick, top: max } = axis(Math.max(...weeks.map((w) => w.high)));
 	const y = (v) => bottom - (v / max) * (bottom - top);
 	const slot = (right - left) / n;
@@ -134,7 +186,7 @@ function chart({ name, days }, theme) {
 	const at = (i) => DRAW_START + (n > 1 ? (i / (n - 1)) * (DRAW_END - DRAW_START) : 0);
 	const grow = Math.max(1.2, ((DRAW_END - DRAW_START) / n) * 1.8);
 
-	// Header: name and yearly total on the left, four stats on the right.
+	// Header: name and yearly total on the left, the stats on the right.
 	const change =
 		last.open > 0
 			? `${lastUp ? '▲' : '▼'} ${Math.abs(((last.close - last.open) / last.open) * 100).toFixed(0)}%`
@@ -142,25 +194,26 @@ function chart({ name, days }, theme) {
 				? '▲ new'
 				: '0%';
 	const stats = [
-		['Last 7 days', `${fmt(last.close)}<tspan dx="6" font-size="12" fill="${lastColour}">${change}</tspan>`],
+		['Last 7 days', `${fmt(last.close)}<tspan dx="6" font-size="${st.labelSize}" fill="${lastColour}">${change}</tspan>`],
 		['Best week', fmt(Math.max(...weeks.map((w) => w.close)))],
 		['Best day', fmt(Math.max(...days.map((d) => d.count)))],
 		['Active days', fmt(days.filter((d) => d.count > 0).length)],
 	]
+		.slice(0, st.count)
 		.map(([label, value], k, all) => {
-			const sx = W - PAD - (all.length - 1 - k) * 104;
-			return `<text x="${sx}" y="42" text-anchor="end" font-size="12" fill="${t.muted}">${label}</text>
-    <text x="${sx}" y="66" text-anchor="end" font-size="18" font-weight="600" fill="${t.ink}">${value}</text>`;
+			const sx = W - PAD - (all.length - 1 - k) * st.gap;
+			return `<text x="${sx}" y="${st.labelY}" text-anchor="end" font-size="${st.labelSize}" fill="${t.muted}">${label}</text>
+    <text x="${sx}" y="${st.valueY}" text-anchor="end" font-size="${st.valueSize}" font-weight="600" fill="${t.ink}">${value}</text>`;
 		})
 		.join('\n    ');
-	const header = `<text x="${PAD}" y="42" font-size="14" font-weight="600" fill="${t.ink}">${esc(name)}<tspan font-weight="400" fill="${t.muted}"> · Contributions · 1W</tspan></text>
-    <text x="${PAD}" y="84" font-size="34" font-weight="700" letter-spacing="-.5" fill="${t.ink}">${fmt(total)}<tspan dx="8" font-size="14" font-weight="400" letter-spacing="0" fill="${t.muted}">contributions in the last year</tspan></text>
+	const header = `<text x="${PAD}" y="${title.y}" font-size="${title.size}" font-weight="600" fill="${t.ink}">${esc(name)}<tspan font-weight="400" fill="${t.muted}"> · ${title.text}</tspan></text>
+    <text x="${PAD}" y="${big.y}" font-size="${big.size}" font-weight="700" letter-spacing="-.5" fill="${t.ink}">${fmt(total)}<tspan dx="${big.gap}" font-size="${big.noteSize}" font-weight="400" letter-spacing="0" fill="${t.muted}">${big.note}</tspan></text>
     ${stats}`;
 
 	let grid = '';
 	for (let v = 0; v <= max; v += tick) {
 		grid += `<line x1="${left}" x2="${right}" y1="${f1(y(v))}" y2="${f1(y(v))}" stroke="${t.grid}"/>
-    <text x="${W - PAD}" y="${f1(y(v) + 4)}" text-anchor="end" font-size="11" fill="${t.muted}">${fmt(v)}</text>`;
+    <text x="${W - PAD}" y="${f1(y(v) + 4)}" text-anchor="end" font-size="${small}" fill="${t.muted}">${fmt(v)}</text>`;
 	}
 
 	let months = '',
@@ -171,9 +224,9 @@ function chart({ name, days }, theme) {
 		if (month === lastMonth) return;
 		lastMonth = month;
 		const mx = x(i) - slot / 2;
-		if (mx - lastLabelX < 30) return;
+		if (mx - lastLabelX < small * 2.2) return;
 		lastLabelX = mx;
-		months += `<text x="${f1(mx)}" y="${H - 16}" font-size="11" fill="${t.muted}">${month}</text>`;
+		months += `<text x="${f1(mx)}" y="${plot.monthsY}" font-size="${small}" fill="${t.muted}">${month}</text>`;
 	});
 
 	// Each candle grows out of its open price at its moment in the loop, like a live candle printing.
@@ -206,14 +259,18 @@ function chart({ name, days }, theme) {
 	// Once the last candle prints: a dashed last-price line, its price tag, and a live dot.
 	const ly = y(last.close);
 	const lx = x(n - 1);
+	const tag = small + 7;
 	const price = `<g style="animation:late ${CYCLE}s linear infinite">
       <line x1="${left}" x2="${right}" y1="${f1(ly)}" y2="${f1(ly)}" stroke="${lastColour}" stroke-width="1" stroke-dasharray="2 3"/>
-      <rect x="${right + 4}" y="${f1(ly - 9)}" width="${W - PAD - right - 4}" height="18" rx="4" fill="${lastColour}"/>
-      <text x="${W - PAD - 5}" y="${f1(ly + 4)}" text-anchor="end" font-size="11" font-weight="600" fill="#fff">${fmt(last.close)}</text>
+      <rect x="${right + 4}" y="${f1(ly - tag / 2)}" width="${W - PAD - right - 4}" height="${tag}" rx="4" fill="${lastColour}"/>
+      <text x="${W - PAD - 5}" y="${f1(ly + 4)}" text-anchor="end" font-size="${small}" font-weight="600" fill="#fff">${fmt(last.close)}</text>
       <circle cx="${f1(lx)}" cy="${f1(ly)}" r="3" fill="${lastColour}"/>
       <circle cx="${f1(lx)}" cy="${f1(ly)}" r="3" fill="none" stroke="${lastColour}" style="transform-origin:${f1(lx)}px ${f1(ly)}px;animation:ping 1.6s ease-out infinite"/>
     </g>`;
 
+	const card = t.edge
+		? `<rect x=".5" y=".5" width="${W - 1}" height="${H - 1}" rx="${LAYOUTS[layout].radius}" fill="${t.card}" stroke="${t.edge}"/>`
+		: `<rect width="${W}" height="${H}" rx="${LAYOUTS[layout].radius}" fill="${t.card}"/>`;
 	const label = `${name}: ${fmt(total)} contributions in the last year, one candle per week`;
 	return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">
   <title>${esc(label)}</title>
@@ -226,7 +283,7 @@ function chart({ name, days }, theme) {
     @media (prefers-reduced-motion: reduce) { * { animation: none !important } }
   </style>
   <defs>${reveal}</defs>
-  <rect x=".5" y=".5" width="${W - 1}" height="${H - 1}" rx="16" fill="${t.card}" stroke="${t.edge}"/>
+  ${card}
     ${header}
     ${grid}
     ${months}
@@ -243,7 +300,7 @@ function chart({ name, days }, theme) {
 if (!LOGIN || !TOKEN) throw new Error('Set LOGIN and GITHUB_TOKEN');
 const data = await contributions(LOGIN);
 await mkdir(OUT, { recursive: true });
-for (const theme of Object.keys(THEMES)) {
-	await writeFile(`${OUT}/chart-${theme}.svg`, chart(data, theme));
+for (const [file, [layout, theme]] of Object.entries(CHARTS)) {
+	await writeFile(`${OUT}/${file}`, chart(data, layout, theme));
 }
 console.log(`Drew ${data.days.length} days for ${LOGIN}`);

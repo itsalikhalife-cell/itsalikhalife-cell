@@ -1,10 +1,10 @@
-# Redraws the contribution chart every six hours and publishes it to the output branch,
-# which the README's images point at. Run it by hand from the Actions tab any time.
+# Redraws the contribution chart every hour and publishes it to the output branch, which the
+# README and ceokhalifa.com load it from. Run it by hand from the Actions tab any time.
 name: contribution chart
 
 on:
   schedule:
-    - cron: '17 */6 * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
   push:
     branches: [main]
@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: chart
@@ -37,3 +38,10 @@ jobs:
           git add .
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -qm "Redraw contribution chart"
           git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" output
+      # GitHub pauses scheduled workflows in a repository with no activity for 60 days.
+      # Re-enabling this one on every run keeps the hourly redraw from being paused.
+      - name: Keep the schedule on
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/chart.yml/enable"
